@@ -99,11 +99,12 @@ func trackActivity(
 		if err != nil {
 			s.active.seconds += pollTimeSeconds
 			s.idle.seconds = 0
-			fmt.Println("😅 User active for", s.active.seconds/60, "min")
+			s.notified.idle = false
+			fmt.Println("😅 Active for", s.active.seconds/60, "min")
 		} else {
 			s.active.seconds = 0
 			s.idle.seconds += pollTimeSeconds
-			fmt.Println("💤 User idle for", s.idle.seconds/60, "min")
+			fmt.Println("💤 Idle for", s.idle.seconds/60, "min")
 		}
 
 		// check pre idle state
@@ -126,9 +127,12 @@ func trackActivity(
 
 		// notify user if idle past given treshold
 		if s.idle.seconds >= notifyAfterMinIdle*60 {
-			err := notifyUser("🦋 Gentle reminder to start working again? (" + strconv.Itoa(s.idle.seconds/60) + " min idle)")
-			if err != nil {
-				fmt.Println("🔴 Error sending notification", err)
+			if !s.notified.idle {
+				err := notifyUser("🦋 Gentle reminder to start working again? (" + strconv.Itoa(s.idle.seconds/60) + " min idle)")
+				if err != nil {
+					fmt.Println("🔴 Error sending notification", err)
+				}
+				s.notified.idle = true
 			}
 		}
 
