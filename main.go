@@ -8,68 +8,125 @@ import (
 )
 
 const (
-	tempFile = "/tmp/user_idle_state"
+	userIdleStateFile    = "/tmp/user_idle_state"
+	userPreIdleStateFile = "/tmp/user_pre_idle_state"
 )
 
-// --
-// Creates a temp file if the user is idle
-// Removes that file if the user is active
-// --
-func handleActivityState(treshold int) {
-	cmd := exec.Command(
-		"swayidle",
-		"-w",
-		"timeout",
-		strconv.Itoa(treshold),
-		"echo 'idle' > "+tempFile,
-		"resume",
-		"rm "+tempFile,
-	)
-	cmd.Run()
-}
-
-// --
-// Sends a notification to the user
-// --
-func sendNotification(message string) error {
-	cmd := exec.Command("notifyme", "-p", "-m", message)
-	return cmd.Run()
-}
-
+// MAIN SCRIPT
 func main() {
 	// --
-	// SETTINGS change to user preference
+	// SETTINGS SET AS PREFERRED
 	// --
 	notifyAfterMinActive := 30 // notify user to break after X min
 	notifyAfterMinIdle := 30   // notify user to start working after X min
 	pollTimeSeconds := 60      // the time between each poll, and therefor notification
-	idleTimeSeconds := 5 * 60  // time before user is considered idle
 
-	// run the idle checker in the background
-	go handleActivityState(idleTimeSeconds)
+	go trackPreIdleState()
+	go trackIdleState()
 
-	secondsActive := 0
-	secondsIdle := 0
+	trackActivity(notifyAfterMinActive, notifyAfterMinIdle, pollTimeSeconds)
+
+}
+
+// Track the user's idle state
+// A file is created if the idle treshold is reached
+// The file acts as a flag to indicate that the user is indeed idle
+func trackIdleState() {
+	secondsUntilIdle := 5 * 60
+
+	cmd := exec.Command(
+		"swayidle",
+		"-w",
+		"timeout",
+		strconv.Itoa(secondsUntilIdle),
+		"echo 'idle' > "+userIdleStateFile,
+		"resume",
+		"rm "+userIdleStateFile,
+	)
+	cmd.Run()
+}
+
+// Shorter version of the trackIdleState function
+// Which holds a shorter leash on the idle state but is more sensitive
+func trackPreIdleState() {
+	secondsUntilPreIdle := 30
+
+	cmd := exec.Command(
+		"swayidle",
+		"-w",
+		"timeout",
+		strconv.Itoa(secondsUntilPreIdle),
+		"echo 'idle' > "+userPreIdleStateFile,
+		"resume",
+		"rm "+userPreIdleStateFile,
+	)
+	cmd.Run()
+}
+
+func notifyUser(message string) error {
+	cmd := exec.Command("notifyme", "-p", "-m", message)
+	return cmd.Run()
+}
+
+func trackActivity(
+	notifyAfterMinActive int,
+	notifyAfterMinIdle int,
+	pollTimeSeconds int,
+) {
+	type Active struct{ seconds int }
+	type Idle struct{ seconds int }
+	type PreIdle struct{ seconds int }
+	type Notified struct {
+		active bool
+		idle   bool
+	}
+	type State struct {
+		active   Active
+		idle     Idle
+		preIdle  PreIdle
+		notified Notified
+	}
+	s := State{
+		active:   Active{seconds: 0},
+		idle:     Idle{seconds: 0},
+		preIdle:  PreIdle{seconds: 0},
+		notified: Notified{active: false, idle: false},
+	}
+
 	for {
-		_, err := exec.Command("cat", tempFile).Output()
+		// check idle state
+		_, err := exec.Command("cat", userIdleStateFile).Output()
 		if err != nil {
-			secondsActive += pollTimeSeconds
-			secondsIdle = 0
-			fmt.Println("😅 User active for", secondsActive/60, "min")
+			s.active.seconds += pollTimeSeconds
+			s.idle.seconds = 0
+			fmt.Println("😅 User active for", s.active.seconds/60, "min")
 		} else {
-			secondsActive = 0
-			secondsIdle += pollTimeSeconds
-			fmt.Println("💤 User idle for", secondsIdle/60, "min")
+			s.active.seconds = 0
+			s.idle.seconds += pollTimeSeconds
+			fmt.Println("💤 User idle for", s.idle.seconds/60, "min")
 		}
 
-		if secondsActive >= notifyAfterMinActive*60 {
-			err := sendNotification("🚨 Self Respect! (" + strconv.Itoa(secondsActive/60) + " min active)")
-			if err != nil {
-				fmt.Println("🔴 Error sending notification", err)
+		// check pre idle state
+		_, err = exec.Command("cat", userPreIdleStateFile).Output()
+		if err == nil {
+			s.preIdle.seconds += pollTimeSeconds
+		} else {
+			s.preIdle.seconds = 0
+		}
+
+		// notify user if active past given treshold
+		if s.active.seconds >= notifyAfterMinActive*60 {
+			if s.preIdle.seconds == 0 {
+				err := notifyUser("🚨 Self Respect! (" + strconv.Itoa(s.active.seconds/60) + " min active)")
+				if err != nil {
+					fmt.Println("🔴 Error sending notification", err)
+				}
 			}
 		}
-		if secondsIdle >= notifyAfterMinIdle*60 {
-			err := sendNotification("🚨 Start working! (" + strconv.Itoa(secondsIdle/60) + " min idle)")
+
+		// notify user if idle past given treshold
+		if s.idle.seconds >= notifyAfterMinIdle*60 {
+			err := notifyUser("🦋 Gentle reminder to start working again? (" + strconv.Itoa(s.idle.seconds/60) + " min idle)")
 			if err != nil {
 				fmt.Println("🔴 Error sending notification", err)
 			}
