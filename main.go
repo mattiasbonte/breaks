@@ -10,6 +10,7 @@ import (
 const (
 	userIdleStateFile    = "/tmp/user_idle_state"
 	userPreIdleStateFile = "/tmp/user_pre_idle_state"
+	secondsUntilIdle     = 7 * 60
 )
 
 // MAIN SCRIPT
@@ -17,8 +18,8 @@ func main() {
 	// --
 	// SETTINGS SET AS PREFERRED
 	// --
-	notifyAfterMinActive := 30 // notify user to break after X min
-	notifyAfterMinIdle := 30   // notify user to start working after X min
+	notifyAfterMinActive := 45 // notify user to break after X min
+	notifyAfterMinIdle := 45   // notify user to start working after X min
 	pollTimeSeconds := 60      // the time between each poll, and therefor notification
 
 	go trackPreIdleState()
@@ -32,8 +33,6 @@ func main() {
 // A file is created if the idle treshold is reached
 // The file acts as a flag to indicate that the user is indeed idle
 func trackIdleState() {
-	secondsUntilIdle := 5 * 60
-
 	cmd := exec.Command(
 		"swayidle",
 		"-w",
@@ -98,13 +97,13 @@ func trackActivity(
 		_, err := exec.Command("cat", userIdleStateFile).Output()
 		if err != nil {
 			s.active.seconds += pollTimeSeconds
-			s.idle.seconds = 0
+			s.idle.seconds = secondsUntilIdle
 			s.notified.idle = false
-			fmt.Println("😅 Active for", s.active.seconds/60, "min")
+			fmt.Println(time.Now().Format("2006-01-02 15:04:05"), "😅 Active for", s.active.seconds/60, "min")
 		} else {
 			s.active.seconds = 0
 			s.idle.seconds += pollTimeSeconds
-			fmt.Println("💤 Idle for", s.idle.seconds/60, "min")
+			fmt.Println(time.Now().Format("2006-01-02 15:04:05"), "💤 Idle for", s.idle.seconds/60, "min")
 		}
 
 		// check pre idle state
