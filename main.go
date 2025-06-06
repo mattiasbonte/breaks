@@ -2,24 +2,49 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 )
 
 const (
 	userIdleStateFile    = "/tmp/user_idle_state"
 	userPreIdleStateFile = "/tmp/user_pre_idle_state"
-	secondsUntilIdle     = 7 * 60
+	secondsUntilIdle     = 7 * 30 // 3min30s
 )
+
+type DisplayServer int
+
+const (
+	Wayland DisplayServer = iota
+	X11
+	Unknown
+)
+
+// detectDisplayServer determines if we're running on X11 or Wayland
+func detectDisplayServer() DisplayServer {
+	// Check for Wayland
+	if os.Getenv("WAYLAND_DISPLAY") != "" {
+		return Wayland
+	}
+	
+	// Check for X11
+	if os.Getenv("DISPLAY") != "" {
+		return X11
+	}
+	
+	return Unknown
+}
 
 // MAIN SCRIPT
 func main() {
 	// --
 	// SETTINGS SET AS PREFERRED
 	// --
-	notifyAfterMinActive := 45 // notify user to break after X min
-	notifyAfterMinIdle := 45   // notify user to start working after X min
+	notifyAfterMinActive := 30 // notify user to break after X min
+	notifyAfterMinIdle := 60   // notify user to start working after X min
 	pollTimeSeconds := 60      // the time between each poll, and therefor notification
 
 	go trackPreIdleState()
@@ -33,33 +58,114 @@ func main() {
 // A file is created if the idle treshold is reached
 // The file acts as a flag to indicate that the user is indeed idle
 func trackIdleState() {
-	cmd := exec.Command(
-		"swayidle",
-		"-w",
-		"timeout",
-		strconv.Itoa(secondsUntilIdle),
-		"echo 'idle' > "+userIdleStateFile,
-		"resume",
-		"rm "+userIdleStateFile,
-	)
-	cmd.Run()
+	displayServer := detectDisplayServer()
+	
+	switch displayServer {
+	case Wayland:
+		cmd := exec.Command(
+			"swayidle",
+			"-w",
+			"timeout",
+			strconv.Itoa(secondsUntilIdle),
+			"echo 'idle' > "+userIdleStateFile,
+			"resume",
+			"rm "+userIdleStateFile,
+		)
+		cmd.Run()
+	case X11:
+		trackIdleStateX11(secondsUntilIdle)
+	default:
+		fmt.Println("🔴 Unknown display server, cannot track idle state")
+	}
+}
+
+// trackIdleStateX11 tracks idle state on X11 using xprintidle
+func trackIdleStateX11(idleThreshold int) {
+	for {
+		cmd := exec.Command("xprintidle")
+		output, err := cmd.Output()
+		if err != nil {
+			fmt.Println("🔴 Error running xprintidle:", err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		
+		idleMs, err := strconv.Atoi(strings.TrimSpace(string(output)))
+		if err != nil {
+			fmt.Println("🔴 Error parsing xprintidle output:", err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		
+		idleSeconds := idleMs / 1000
+		
+		if idleSeconds >= idleThreshold {
+			// Create idle state file
+			exec.Command("sh", "-c", "echo 'idle' > "+userIdleStateFile).Run()
+		} else {
+			// Remove idle state file
+			exec.Command("rm", userIdleStateFile).Run()
+		}
+		
+		time.Sleep(1 * time.Second)
+	}
+}
+
+// trackPreIdleStateX11 tracks pre-idle state on X11 using xprintidle
+func trackPreIdleStateX11(idleThreshold int) {
+	for {
+		cmd := exec.Command("xprintidle")
+		output, err := cmd.Output()
+		if err != nil {
+			fmt.Println("🔴 Error running xprintidle:", err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		
+		idleMs, err := strconv.Atoi(strings.TrimSpace(string(output)))
+		if err != nil {
+			fmt.Println("🔴 Error parsing xprintidle output:", err)
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		
+		idleSeconds := idleMs / 1000
+		
+		if idleSeconds >= idleThreshold {
+			// Create pre-idle state file
+			exec.Command("sh", "-c", "echo 'idle' > "+userPreIdleStateFile).Run()
+		} else {
+			// Remove pre-idle state file
+			exec.Command("rm", userPreIdleStateFile).Run()
+		}
+		
+		time.Sleep(1 * time.Second)
+	}
 }
 
 // Shorter version of the trackIdleState function
 // Which holds a shorter leash on the idle state but is more sensitive
 func trackPreIdleState() {
 	secondsUntilPreIdle := 30
-
-	cmd := exec.Command(
-		"swayidle",
-		"-w",
-		"timeout",
-		strconv.Itoa(secondsUntilPreIdle),
-		"echo 'idle' > "+userPreIdleStateFile,
-		"resume",
-		"rm "+userPreIdleStateFile,
-	)
-	cmd.Run()
+	displayServer := detectDisplayServer()
+	
+	switch displayServer {
+	case Wayland:
+		cmd := exec.Command(
+			"swayidle",
+			"-w",
+			"timeout",
+			strconv.Itoa(secondsUntilPreIdle),
+			"echo 'idle' > "+userPreIdleStateFile,
+			"resume",
+			"rm "+userPreIdleStateFile,
+		)
+		cmd.Run()
+	case X11:
+		trackPreIdleStateX11(secondsUntilPreIdle)
+	default:
+		fmt.Println("🔴 Unknown display server, cannot track pre-idle state")
+	}
 }
 
 func notifyUser(message string) error {
